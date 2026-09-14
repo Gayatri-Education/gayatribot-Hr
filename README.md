@@ -1,62 +1,152 @@
-# GayatriBot - HR Automation System
+# GayatriBot - HR & Recruitment Automation System
 
 > **Note:** This project has been developed under the [Dbert online internship program](https://dbert.online). We thank the Dbert team for their guidance and support.
 
-GayatriBot is an automated HR and Recruitment system built to streamline the hiring process for the Gayatri Education Project. The system consists of three independent background processes that work together to poll application data, process CVs using AI, and provide a dashboard for administrators.
+GayatriBot is an enterprise-grade automated HR and Recruitment management system built for the Gayatri Education Project. The system connects Google Forms/Sheets, local AI (Ollama LLM) for intelligent resume parsing, a rotating multi-account SMTP email pool, cross-platform PDF offer letter generation, and a real-time Flask web administration dashboard.
 
-## System Architecture
+---
 
-The system runs as three independent processes:
+## 🚀 Key Features
 
-1. **Email Bot (`bot.py`)**: Polls a Google Sheet every 5 minutes, sending acknowledgement & confirmation emails via Outlook.
-2. **CV Processor (`cv_processor.py`)**: Downloads CVs from Google Drive, extracts text, and analyzes them via a local Ollama LLM.
-3. **Flask Dashboard (`flask_app.py`)**: An admin web interface for managing applicants and skills.
+### 1. 🤖 Automated Application Polling & Email Dispatch
+- **Google Sheets Integration**: Polls candidate submissions periodically using Google Sheets API via service account authentication.
+- **Smart SMTP Pool**: Distributes outgoing acknowledgment, confirmation, and reminder emails across a pool of SMTP sender accounts to prevent mailbox rate limits and spam flagging.
+- **Automated Induction Scheduling**: Dynamically schedules the upcoming Monday HR induction date.
 
-## Prerequisites
+### 2. 🧠 AI-Powered CV & Resume Parsing
+- **Local Ollama LLM (`llama3:8b`)**: Extracts candidate skills, education, and domain alignment without sending sensitive applicant data to external third-party APIs.
+- **Domain Matching**: Analyzes applicant compatibility against configurable track requirements (Data Analyst, Full Stack, AI Agent Development, Python Automation).
 
-- Windows 10/11 machine
-- Outlook installed and logged in as your sender email (e.g., `careers@dbert.online`)
-- Python 3.9+ installed
-- [Ollama](https://ollama.ai) installed locally (for CV analysis)
-- Google Cloud Service Account JSON key (`service_account.json`)
-- Google Sheet connected to your Google Form
+### 3. 📄 Cross-Platform PDF Offer Letter Generation (Linux / Cloud Ready)
+- **Pure-Python Engine via ReportLab**: Generates high-fidelity, professional PDF offer letters with customized terms, dates, and candidate information.
+- **No Microsoft Word / COM Automation Dependency**: Fully compatible with Linux, macOS, Docker, and cloud hosting environments (with graceful legacy `.docx`/Word COM fallback if present).
 
-## Setup Instructions
+### 4. 🎯 Web Dashboard & 1-Click Operations
+- **1-Click Offer Dispatch**: Dispatch individualized PDF offer letters directly from any applicant detail view with automated generation and email delivery.
+- **Multi-Select Bulk Actions Toolbar**: Batch select candidates on the applicant table to execute:
+  - *Bulk Approve*
+  - *Bulk Reject*
+  - *Bulk Send Reminders*
+  - *Bulk Dispatch Offer Letters*
+- **Real-Time Live Activity & Log Stream**: Built-in Server-Sent Events (SSE) live terminal on the main dashboard streaming system activity and background dispatch events live without page refreshes.
+- **Offer Letter Archive**: Instant browser download and preview links for all generated offer letter PDFs.
 
-### 1. Install Python Dependencies
-Open your terminal in the project directory and run:
+---
+
+## 🏗️ System Architecture
+
+```
+                       ┌─────────────────────────┐
+                       │  Google Forms / Sheets  │
+                       └────────────┬────────────┘
+                                    │ (Service Account)
+                                    ▼
+                       ┌─────────────────────────┐
+                       │   SQLite (gayatri.db)   │
+                       └──────▲───────────▲──────┘
+                              │           │
+            ┌─────────────────┴─┐       ┌─┴─────────────────┐
+            │   bot.py          │       │  cv_processor.py  │
+            │   - Polling       │       │  - Google Drive   │
+            │   - Auto emails   │       │  - Ollama LLM     │
+            │   - SMTP Pool     │       │  - Skill Match    │
+            └───────────────────┘       └───────────────────┘
+                                    ▲
+                                    │
+                       ┌────────────┴────────────┐
+                       │   flask_app.py (Admin)  │
+                       │   - Real-time Dashboard │
+                       │   - SSE Log Stream      │
+                       │   - Bulk Actions        │
+                       │   - 1-Click Offer Gen   │
+                       │   - ReportLab PDF Engine│
+                       └─────────────────────────┘
+```
+
+---
+
+## 🛠️ Prerequisites
+
+- **Python 3.9+** (Windows, Linux, or macOS)
+- **Google Cloud Service Account JSON key** (`service_account.json`) with Google Sheets & Drive API access
+- **[Ollama](https://ollama.ai)** installed and running locally with the `llama3:8b` model:
+  ```bash
+  ollama pull llama3:8b
+  ```
+- **SMTP credentials** (e.g. Gmail / Google Workspace App Passwords or custom SMTP mail server)
+
+---
+
+## 📦 Installation & Setup
+
+### 1. Clone the Repository
 ```bash
-# Create virtual environment (recommended)
+git clone https://github.com/editor-shannu/gayatribot-Hr.git
+cd gayatribot-Hr
+```
+
+### 2. Create and Activate a Virtual Environment
+```bash
+# Windows
 python -m venv venv
 venv\Scripts\activate
 
-# Install packages
+# Linux / macOS
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### 3. Install Dependencies
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure Credentials
-- Copy your Google Service Account JSON key file to the project folder as `service_account.json`.
-- Share your Google Sheet with the service account email address found inside the JSON key.
-
-### 3. Install and Run Ollama
-The system uses the `llama3:8b` model for CV analysis.
+### 4. Configure Environment Variables (`.env`)
+Copy `.env.example` to create your local `.env` file:
 ```bash
-ollama pull llama3:8b
+cp .env.example .env
 ```
+Open `.env` and fill in your configuration:
+- `GOOGLE_SHEET_ID`: Your Google Sheet document ID.
+- `SERVICE_ACCOUNT_KEY`: Path to your `service_account.json`.
+- `SMTP_SENDER_*_EMAIL` & `SMTP_SENDER_*_PASSWORD`: Your SMTP sender accounts and passwords.
+- `WHATSAPP_GROUP_URL` & `RESULTS_URL`: Candidate onboarding links.
 
-### 4. Configure `bot_config.py`
-Open `bot_config.py` and verify your settings, ensuring `SENDER_EMAIL` matches the Outlook account you will send from.
+> 🔒 **Security Notice:** The `.env` file and `service_account.json` are strictly ignored by `.gitignore`. Never commit credentials to version control.
 
-## Running the System
-You need to open three separate terminal windows and activate the virtual environment (`venv\Scripts\activate`) in each. Then, run the following scripts:
+---
 
-- **Terminal 1**: `python bot.py`
-- **Terminal 2**: `python cv_processor.py`
-- **Terminal 3**: `python flask_app.py`
+## 🏃 Running the System
 
-Once everything is running, access the admin dashboard at `http://localhost:5000`.
+To run the complete system, launch the components in separate terminal windows (with your virtual environment activated):
 
-## Features
-- **Automated Communication**: Send instant acknowledgement and approval emails.
-- **AI CV Analysis**: Uses Ollama to extract text and analyze skills based on specific domain requirements.
-- **Admin Dashboard**: Manage applicant status, track processing queues, and edit skill requirements.
+### Terminal 1: Application Poller & Email Bot
+```bash
+python bot.py
+```
+*Polls Google Sheets for new submissions and sends automated acknowledgments.*
+
+### Terminal 2: AI CV Processor
+```bash
+python cv_processor.py
+```
+*Fetches resumes from Google Drive and analyzes skills via Ollama.*
+
+### Terminal 3: Flask Admin Dashboard
+```bash
+python flask_app.py
+```
+*Starts the administrative web console at `http://localhost:5000`.*
+
+### Terminal 4 (Optional): Standalone Offer Letter Dispatcher
+```bash
+python offer_letter_sender.py
+```
+*Batch generates ReportLab PDFs and emails offer letters to all approved candidates.*
+
+---
+
+## 🛡️ Security & Best Practices
+- **Zero Hardcoded Secrets**: All sensitive keys, sheet IDs, and passwords are loaded via environment variables (`python-dotenv`).
+- **Safe Logging**: Structured logging sanitizes and excludes credentials and sensitive tokens.
+- **Rate-Limited Dispatching**: Built-in delays and hourly/daily limits protect SMTP accounts from reputation degradation.
