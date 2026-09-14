@@ -16,7 +16,7 @@ gayatri.db
 
 # Secrets & Configuration
 service_account.json
-.env
+.env*
 
 # Application State & Output
 .bot_paused
@@ -40,3 +40,6 @@ QrCode.jpeg
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Scratch and test scripts
+scratch/

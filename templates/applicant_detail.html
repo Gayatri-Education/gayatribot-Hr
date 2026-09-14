@@ -177,32 +177,71 @@
             {% endif %}
         </div>
 
-        <!-- Approval Actions -->
+        <!-- Approval & Offer Actions -->
         <div class="card">
-            <h2>✅ Approval Action</h2>
-            <p style="margin-bottom: 12px; color: #555;">
-                Current status: <strong>
-                    {% if applicant.approval_status == 'Approved' %}
-                        <span class="badge approved">Approved</span>
-                    {% elif applicant.approval_status == 'Rejected' %}
-                        <span class="badge rejected">Rejected</span>
-                    {% else %}
-                        <span class="badge pending">Pending</span>
-                    {% endif %}
-                </strong>
-            </p>
-            <form method="POST" action="/applicant/{{ applicant.id }}/approve" style="display:inline;">
-                <button type="submit" name="action" value="approve" class="btn btn-success"
-                    onclick="return confirm('Approve this applicant? This will trigger a confirmation email.')">
-                    ✅ Approve
-                </button>
-            </form>
-            <form method="POST" action="/applicant/{{ applicant.id }}/approve" style="display:inline; margin-left: 8px;">
-                <button type="submit" name="action" value="reject" class="btn btn-danger"
-                    onclick="return confirm('Reject this applicant?')">
-                    ❌ Reject
-                </button>
-            </form>
+            <h2>⚡ Quick Actions</h2>
+            <div style="display: flex; flex-wrap: wrap; gap: 20px; justify-content: space-between; align-items: center;">
+                <div>
+                    <p style="margin-bottom: 8px; color: #555;">
+                        Approval Status: <strong>
+                            {% if applicant.approval_status == 'Approved' %}
+                                <span class="badge approved">Approved</span>
+                            {% elif applicant.approval_status == 'Rejected' %}
+                                <span class="badge rejected">Rejected</span>
+                            {% else %}
+                                <span class="badge pending">Pending</span>
+                            {% endif %}
+                        </strong>
+                    </p>
+                    <div class="action-buttons" style="margin-top: 5px;">
+                        <form method="POST" action="/applicant/{{ applicant.id }}/approve" style="display:inline;">
+                            <button type="submit" name="action" value="approve" class="btn btn-success"
+                                onclick="return confirm('Approve this applicant? This will update their status.')">
+                                ✅ Approve
+                            </button>
+                        </form>
+                        <form method="POST" action="/applicant/{{ applicant.id }}/approve" style="display:inline;">
+                            <button type="submit" name="action" value="reject" class="btn btn-danger"
+                                onclick="return confirm('Reject this applicant?')">
+                                ❌ Reject
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <div style="border-left: 2px solid #e2e8f0; padding-left: 20px;">
+                    <p style="margin-bottom: 8px; color: #555;">
+                        Offer Letter Status:
+                        {% if applicant.offer_sent_at %}
+                            <span class="badge yes">Sent ({{ format_date(applicant.offer_sent_at) }})</span>
+                        {% else %}
+                            <span class="badge pending">Not Sent</span>
+                        {% endif %}
+                    </p>
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <form method="POST" action="/applicant/{{ applicant.id }}/send-offer" id="offerDispatchForm" style="display:inline;">
+                            {% if applicant.offer_sent_at %}
+                            <input type="hidden" name="force" value="true">
+                            <button type="submit" class="btn" style="background:#0284c7; color:white;"
+                                onclick="return confirm('Offer letter was already sent on {{ format_date(applicant.offer_sent_at) }}. Resend another copy now?')">
+                                🔄 Re-dispatch Offer Letter
+                            </button>
+                            {% else %}
+                            <button type="submit" class="btn" style="background:#0284c7; color:white;"
+                                onclick="this.disabled=true; this.innerText='Generating PDF & Sending...'; this.form.submit();">
+                                📜 Dispatch Offer Letter
+                            </button>
+                            {% endif %}
+                        </form>
+
+                        {% if offer_pdf_filename %}
+                        <a href="/offers/download/{{ offer_pdf_filename }}" target="_blank" class="btn" style="background:#475569; color:white;">
+                            📥 View PDF
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Email History -->
@@ -214,12 +253,26 @@
                     <div class="value">{{ format_date(applicant.confirmation_sent_at) or '—' }}</div>
                 </div>
                 <div class="info-item">
-                    <div class="label">Email Status</div>
+                    <div class="label">Result Status</div>
                     <div class="value">
                         {% if applicant.confirmation_sent_at %}
                             <span class="badge yes">Sent</span>
                         {% else %}
                             <span class="badge pending">Pending</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="info-item">
+                    <div class="label">Offer Letter Sent At</div>
+                    <div class="value">{{ format_date(applicant.offer_sent_at) or '—' }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="label">Offer PDF Document</div>
+                    <div class="value">
+                        {% if offer_pdf_filename %}
+                            <a href="/offers/download/{{ offer_pdf_filename }}" target="_blank">📄 {{ offer_pdf_filename }}</a>
+                        {% else %}
+                            —
                         {% endif %}
                     </div>
                 </div>
