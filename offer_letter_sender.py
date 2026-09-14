@@ -38,6 +38,11 @@ from pathlib import Path
 from docx import Document
 from pypdf import PdfReader, PdfWriter
 
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+
 from bot_config import (
     SENDER_POOL,
     SMTP_MIN_DELAY_SECONDS,
@@ -352,23 +357,208 @@ def _replace_placeholders_in_docx(doc_path, replacements):
 
 
 def _convert_docx_to_pdf(docx_path, pdf_path):
-    """Convert DOCX to PDF using MS Word COM automation (pywin32)."""
-    import win32com.client
-    import pythoncom
-
-    pythoncom.CoInitialize()
+    """Convert DOCX to PDF using MS Word COM automation (pywin32).
+    Falls back gracefully if Word or pywin32 is unavailable.
+    """
     try:
-        word = win32com.client.Dispatch("Word.Application")
-        word.Visible = False
-        doc = word.Documents.Open(str(os.path.abspath(docx_path)))
-        doc.SaveAs(str(os.path.abspath(pdf_path)), FileFormat=17)  # 17 = wdFormatPDF
-        doc.Close()
-        word.Quit()
-    finally:
-        pythoncom.CoUninitialize()
+        import win32com.client
+        import pythoncom
+
+        pythoncom.CoInitialize()
+        try:
+            word = win32com.client.Dispatch("Word.Application")
+            word.Visible = False
+            doc = word.Documents.Open(str(os.path.abspath(docx_path)))
+            doc.SaveAs(str(os.path.abspath(pdf_path)), FileFormat=17)  # 17 = wdFormatPDF
+            doc.Close()
+            word.Quit()
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception as e:
+        logger.warning(f"Word COM conversion failed ({e}).")
 
     if not os.path.exists(pdf_path):
         raise RuntimeError("Word did not produce a PDF for %s" % docx_path)
+
+
+def _generate_pdf_reportlab(applicant: dict, offer_ref: str, output_path: str,
+                            start_date_str: str, end_date_str: str, domain_display: str) -> str:
+    """Generate a high-quality, professional offer letter PDF using ReportLab.
+    Runs on all platforms (Windows, Linux, Docker, Cloud) without Microsoft Word.
+    """
+    name = applicant.get("name", "Candidate")
+    email = applicant.get("email", "")
+
+    doc = SimpleDocTemplate(
+        output_path,
+        pagesize=letter,
+        rightMargin=40,
+        leftMargin=40,
+        topMargin=36,
+        bottomMargin=36,
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=20,
+        leading=24,
+        textColor=colors.HexColor('#1e3a5f'),
+        alignment=1,
+    )
+    subtitle_style = ParagraphStyle(
+        'DocSubtitle',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=11,
+        leading=14,
+        textColor=colors.HexColor('#2563eb'),
+        alignment=1,
+        spaceAfter=12,
+    )
+    meta_style = ParagraphStyle(
+        'MetaStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor('#475569'),
+    )
+    meta_right = ParagraphStyle(
+        'MetaRight',
+        parent=meta_style,
+        alignment=2,
+    )
+    body_style = ParagraphStyle(
+        'Body',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9.5,
+        leading=13.5,
+        textColor=colors.HexColor('#334155'),
+        spaceAfter=8,
+    )
+    cell_style = ParagraphStyle(
+        'Cell',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor('#1e293b'),
+    )
+    cell_bold = ParagraphStyle(
+        'CellBold',
+        parent=cell_style,
+        fontName='Helvetica-Bold',
+        textColor=colors.HexColor('#1e3a5f'),
+    )
+
+    elements = []
+
+    # Header Branding
+    elements.append(Paragraph("GAYATRI EDUCATION", title_style))
+    elements.append(Paragraph("OFFICIAL INTERNSHIP OFFER &amp; APPOINTMENT LETTER", subtitle_style))
+
+    # Reference & Date Header Table
+    today_str = datetime.now().strftime("%d %B %Y")
+    meta_data = [
+        [Paragraph(f"<b>Offer Reference:</b> {offer_ref}", meta_style),
+         Paragraph(f"<b>Date of Issue:</b> {today_str}", meta_right)]
+    ]
+    meta_table = Table(meta_data, colWidths=[260, 270])
+    meta_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+    ]))
+    elements.append(meta_table)
+    elements.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor('#1e3a5f'), spaceBefore=3, spaceAfter=10))
+
+    # Candidate info
+    elements.append(Paragraph(f"<b>To:</b> {name}", body_style))
+    elements.append(Paragraph(f"<b>Candidate Email:</b> {email}", body_style))
+    elements.append(Paragraph(f"<b>Selected Internship Track:</b> {domain_display}", body_style))
+    elements.append(Spacer(1, 4))
+
+    # Salutation & Opening
+    elements.append(Paragraph(f"Dear <b>{name}</b>,", body_style))
+    elements.append(Paragraph(
+        f"Following the review of your application and credentials, <b>Gayatri Education</b> is pleased to extend "
+        f"this formal offer of appointment for the position of <b>Intern — {domain_display}</b>. "
+        f"We were impressed by your background and enthusiasm, and look forward to your contributions in our upcoming cohort.",
+        body_style
+    ))
+    elements.append(Spacer(1, 4))
+
+    # Details Table
+    table_data = [
+        [Paragraph("<b>Term / Parameter</b>", cell_bold), Paragraph("<b>Appointment Specification</b>", cell_bold)],
+        [Paragraph("Selected Track", cell_style), Paragraph(domain_display, cell_bold)],
+        [Paragraph("Tenure &amp; Duration", cell_style), Paragraph(f"2 Months ({start_date_str} to {end_date_str})", cell_style)],
+        [Paragraph("Work Arrangement", cell_style), Paragraph(f"{WORK_MODE}", cell_style)],
+        [Paragraph("Weekly Commitment", cell_style), Paragraph(f"{HOURS_PER_WEEK} Hours / Week (Flexible Schedule)", cell_style)],
+        [Paragraph("Fixed Base Stipend", cell_style), Paragraph(f"&#8377;{STIPEND_FIXED} / month", cell_style)],
+        [Paragraph("Performance Incentive", cell_style), Paragraph(f"Up to &#8377;{STIPEND_PERFORMANCE} / month", cell_style)],
+        [Paragraph("Total Earning Potential", cell_style), Paragraph(f"<b>&#8377;{STIPEND_TOTAL} / month</b>", cell_bold)],
+    ]
+    t = Table(table_data, colWidths=[190, 340])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f1f5f9')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#1e3a5f')),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('LEFTPADDING', (0,0), (-1,-1), 8),
+        ('RIGHTPADDING', (0,0), (-1,-1), 8),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+    ]))
+    elements.append(t)
+    elements.append(Spacer(1, 10))
+
+    # HR Induction & Acceptance Box
+    notice_text = (
+        f"<b>HR Induction &amp; Enrollment:</b> Selected candidates must attend the HR induction on <b>{HR_INDUCTION_DATE}</b>. "
+        "The security deposit of &#8377;499 collected upon joining is 100% fully refundable if you decide not to proceed. "
+        "Upon successful completion of the 2-month internship, you will receive an official Certificate of Completion and Letter of Recommendation (LOR)."
+    )
+    notice_table = Table([[Paragraph(notice_text, cell_style)]], colWidths=[530])
+    notice_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#eff6ff')),
+        ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#3b82f6')),
+        ('PADDING', (0,0), (-1,-1), 7),
+    ]))
+    elements.append(notice_table)
+    elements.append(Spacer(1, 10))
+
+    # Acceptance Instructions
+    elements.append(Paragraph(
+        "<b>Next Steps:</b> Reply to your offer email with <i>\"I accept the offer\"</i> and submit your enrollment details "
+        "prior to the start date to lock in your slot.",
+        body_style
+    ))
+
+    # Signature Block
+    sig_data = [
+        [
+            Paragraph("<b>Authorized Signatory</b><br/><br/><b>Gayatri Education HR Operations</b><br/>Gayatri Education Project<br/>contactus@gayatrieducation.tech", cell_style),
+            Paragraph(f"<b>Candidate Acceptance</b><br/><br/>Signature: __________________________<br/>Name: {name}<br/>Date: ______________________________", cell_style),
+        ]
+    ]
+    sig_table = Table(sig_data, colWidths=[265, 265])
+    sig_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+    ]))
+    elements.append(sig_table)
+    elements.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#cbd5e1'), spaceBefore=10, spaceAfter=4))
+    elements.append(Paragraph("Gayatri Education Project &bull; Official Appointment Document &bull; Verified via GayatriBot",
+                              ParagraphStyle('Foot', parent=meta_style, alignment=1, fontSize=8, textColor=colors.HexColor('#94a3b8'))))
+
+    doc.build(elements)
+    return output_path
 
 
 def _embed_pdf_metadata(pdf_path, metadata: dict):
@@ -379,9 +569,7 @@ def _embed_pdf_metadata(pdf_path, metadata: dict):
     for page in reader.pages:
         writer.add_page(page)
 
-    # Build metadata dict with standard + custom keys
     meta = {f"/{k}": str(v) for k, v in metadata.items()}
-    # Preserve any existing metadata
     if reader.metadata:
         for k, v in reader.metadata.items():
             if k not in meta and k not in ("/Producer", "/Creator"):
@@ -394,98 +582,172 @@ def _embed_pdf_metadata(pdf_path, metadata: dict):
 
 
 def generate_offer_pdf(applicant: dict, offer_ref: str) -> str:
-    """
-    Generate a personalized offer letter PDF for the given applicant.
-
-    Steps:
-      1. Replace placeholders in sampleoffer.docx
-      2. MS Word COM: DOCX -> PDF (pywin32)
-      3. Embed metadata via pypdf
-
-    Returns the path to the generated PDF.
+    """Generate a personalized offer letter PDF for the given applicant.
+    Uses ReportLab as the default cross-platform engine (no MS Word required).
+    Falls back to DOCX template if present and Word COM is explicitly available.
     """
     name = applicant.get("name", "Candidate")
     email = applicant.get("email", "")
     domain_raw = applicant.get("internship_domain", "")
     start_date_raw = applicant.get("submitted_at", "") or applicant.get("start_date", "")
 
-    # Parse start date
     start_date_str = _parse_start_date(start_date_raw)
     start_dt = datetime.strptime(start_date_str, "%d-%b-%Y")
     end_dt = start_dt + timedelta(days=60)
     end_date_str = end_dt.strftime("%d-%b-%Y")
 
-    # Handle blank domain
-    if not domain_raw or domain_raw.strip().lower() in ("", "nan", "none"):
+    if not domain_raw or str(domain_raw).strip().lower() in ("", "nan", "none"):
         domain_raw = "To be selected during enrollment"
 
     domain_display = str(domain_raw).strip()
 
-    # Build replacements for DOCX template
-    replacements = {
-        "{name}": name,
-        "{email}": email,
-        "{date}": start_date_str,
-        "{start_date}": start_date_str,
-        "{end_date}": end_date_str,
-        "{company_name}": "Gayatri Education",
-        "{internship}": domain_display,
-        "{stipend_fixed}": STIPEND_FIXED,
-        "{stipend_performance}": STIPEND_PERFORMANCE,
-        "{stipend_total}": STIPEND_TOTAL,
-        "{hours_per_week}": HOURS_PER_WEEK,
-        "{work_mode}": WORK_MODE,
-        "{whatsapp_group_link}": WHATSAPP_GROUP_URL,
-        "{lms_portal_link}": APPLICATION_URL,
-        "{enrollment_link}": APPLICATION_URL,
-    }
-
-    # Ensure output directory exists
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    # Sanitize filename
     safe_name = re.sub(r"[^\w\s-]", "", name).strip()
     safe_name = re.sub(r"[\s]+", "_", safe_name)
     final_pdf = os.path.join(OUTPUT_DIR, f"offer_{safe_name}_{offer_ref[:8]}.pdf")
 
-    # Step 1: DOCX placeholder replacement
-    doc = _replace_placeholders_in_docx(SAMPLE_OFFER_DOCX, replacements)
-
-    # Save to temp file
-    tmp_dir = tempfile.mkdtemp(prefix="offer_")
-    tmp_docx = os.path.join(tmp_dir, f"temp_{uuid.uuid4().hex}.docx")
-    doc.save(tmp_docx)
-
-    # Step 2: MS Word COM: DOCX -> PDF (saves directly to final path)
-    _convert_docx_to_pdf(tmp_docx, final_pdf)
-
-    # Step 3: Embed metadata
-    _embed_pdf_metadata(final_pdf, {
-        "offer_ref": offer_ref,
-        "candidate_email": email,
-        "candidate_name": name,
-        "domain": domain_display,
-        "start_date": start_date_str,
-        "end_date": end_date_str,
-        "send_date": datetime.now().strftime("%Y-%m-%d"),
-        "sender": "Gayatri Education HR Team",
-        "company": "Gayatri Education",
-    })
-
-    # Cleanup temp files
-    for f in [tmp_docx]:
+    # If DOCX template exists, try Word COM conversion; otherwise use pure-Python ReportLab
+    used_docx = False
+    if os.path.exists(SAMPLE_OFFER_DOCX):
         try:
-            if os.path.exists(f):
-                os.remove(f)
-        except Exception:
-            pass
+            replacements = {
+                "{name}": name,
+                "{email}": email,
+                "{date}": start_date_str,
+                "{start_date}": start_date_str,
+                "{end_date}": end_date_str,
+                "{company_name}": "Gayatri Education",
+                "{internship}": domain_display,
+                "{stipend_fixed}": STIPEND_FIXED,
+                "{stipend_performance}": STIPEND_PERFORMANCE,
+                "{stipend_total}": STIPEND_TOTAL,
+                "{hours_per_week}": HOURS_PER_WEEK,
+                "{work_mode}": WORK_MODE,
+                "{whatsapp_group_link}": WHATSAPP_GROUP_URL,
+                "{lms_portal_link}": APPLICATION_URL,
+                "{enrollment_link}": APPLICATION_URL,
+            }
+            doc = _replace_placeholders_in_docx(SAMPLE_OFFER_DOCX, replacements)
+            tmp_dir = tempfile.mkdtemp(prefix="offer_")
+            tmp_docx = os.path.join(tmp_dir, f"temp_{uuid.uuid4().hex}.docx")
+            doc.save(tmp_docx)
+            _convert_docx_to_pdf(tmp_docx, final_pdf)
+            used_docx = True
+            try:
+                os.remove(tmp_docx)
+                os.rmdir(tmp_dir)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.info(f"DOCX template conversion failed or unavailable ({e}). Using ReportLab.")
+
+    if not used_docx:
+        _generate_pdf_reportlab(
+            applicant=applicant,
+            offer_ref=offer_ref,
+            output_path=final_pdf,
+            start_date_str=start_date_str,
+            end_date_str=end_date_str,
+            domain_display=domain_display,
+        )
+
+    # Embed standard metadata
     try:
-        if os.path.exists(tmp_dir):
-            os.rmdir(tmp_dir)
-    except Exception:
-        pass
+        _embed_pdf_metadata(final_pdf, {
+            "offer_ref": offer_ref,
+            "candidate_email": email,
+            "candidate_name": name,
+            "domain": domain_display,
+            "start_date": start_date_str,
+            "end_date": end_date_str,
+            "send_date": datetime.now().strftime("%Y-%m-%d"),
+            "sender": "Gayatri Education HR Team",
+            "company": "Gayatri Education",
+        })
+    except Exception as e:
+        logger.warning(f"Could not embed PDF metadata: {e}")
 
     return final_pdf
+
+
+def send_single_offer(applicant_or_id, force=False):
+    """Generate and dispatch an offer letter PDF to a single applicant.
+    Can be called directly by the web dashboard or CLI.
+    Returns: (success: bool, message: str, pdf_path: str | None)
+    """
+    from database import get_applicant_detail, update_offer_sent_at, add_processing_log
+
+    if isinstance(applicant_or_id, (int, str)) and str(applicant_or_id).isdigit():
+        applicant = get_applicant_detail(int(applicant_or_id))
+    elif isinstance(applicant_or_id, dict):
+        applicant = applicant_or_id
+    else:
+        return False, "Invalid applicant reference", None
+
+    if not applicant:
+        return False, "Applicant not found", None
+
+    to_addr = applicant.get("email", "").strip()
+    if not to_addr:
+        return False, "Applicant has no email address", None
+
+    # Check pause status
+    if not force and is_blocked("offers"):
+        pause_type = "Global" if get_global_pause_info()[0] else "Offers"
+        return False, f"Email sending is currently paused ({pause_type} pause active)", None
+
+    # Check enrollment
+    if not force and is_enrolled(to_addr):
+        return False, f"Candidate {to_addr} is already enrolled. Offer skipped.", None
+
+    offer_ref = f"OFF-{datetime.now().strftime('%y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+
+    # Dates
+    start_date_raw = applicant.get("submitted_at", "") or applicant.get("start_date", "")
+    start_date_str = _parse_start_date(start_date_raw)
+    start_dt = datetime.strptime(start_date_str, "%d-%b-%Y")
+    end_dt = start_dt + timedelta(days=60)
+    end_date_str = end_dt.strftime("%d-%b-%Y")
+
+    # Generate PDF
+    try:
+        pdf_path = generate_offer_pdf(applicant, offer_ref)
+    except Exception as e:
+        logger.error(f"Failed to generate offer PDF for {to_addr}: {e}")
+        return False, f"Failed to generate PDF: {str(e)}", None
+
+    # Build email
+    subject, html_body, text_body = build_offer_email(applicant, start_date_str, end_date_str)
+
+    # Sender pool
+    try:
+        pool = SenderPool()
+        sender = pool.pick_sender()
+        if not sender:
+            return False, "All senders have reached their hourly/daily rate limit. Please try later.", pdf_path
+
+        success = _send_offer_email_with_attachment(
+            smtp_sender=sender,
+            to_addr=to_addr,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            pdf_path=pdf_path,
+            pool=pool,
+            campaign_id=None,
+        )
+
+        if success:
+            sent_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            update_offer_sent_at(to_addr, sent_time)
+            add_processing_log(to_addr, "offer_letter_dispatched", f"Offer letter sent via {sender.email}")
+            return True, f"Offer letter successfully dispatched to {to_addr}", pdf_path
+        else:
+            return False, f"Failed to send email via SMTP", pdf_path
+
+    except Exception as e:
+        logger.error(f"Error dispatching offer letter to {to_addr}: {e}")
+        return False, f"Dispatch error: {str(e)}", pdf_path
 
 
 def _parse_start_date(raw: str) -> str:
