@@ -16,7 +16,7 @@ gayatri.db
 
 # Secrets & Configuration
 service_account.json
-.env
+.env*
 
 # Application State & Output
 .bot_paused
