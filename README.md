@@ -101,27 +101,6 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment Variables (`.env`)
-Create a `.env` file in the root directory and populate your configuration:
-```env
-GOOGLE_SHEET_NAME=Gayatri Education Project Responses
-GOOGLE_SHEET_ID=your_google_sheet_id_here
-SERVICE_ACCOUNT_KEY=service_account.json
-
-# SMTP Senders (Gmail App Passwords or custom SMTP)
-SMTP_SENDER_1_EMAIL=hr@gayatrieducation.tech
-SMTP_SENDER_1_PASSWORD=your_app_password_1
-SMTP_SENDER_2_EMAIL=careers@gayatrieducation.tech
-SMTP_SENDER_2_PASSWORD=your_app_password_2
-
-# Onboarding links
-WHATSAPP_GROUP_URL=https://chat.whatsapp.com/example
-RESULTS_URL=https://gayatrieducation.tech/results
-```
-
-> 🔒 **Security Notice:** The `.env` file and `service_account.json` are strictly ignored by `.gitignore`. Never commit credentials to version control.
-
----
 
 ## 🏃 Running the System
 
