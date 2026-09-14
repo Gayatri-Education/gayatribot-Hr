@@ -188,6 +188,12 @@
             .navbar { flex-direction: column; gap: 10px; }
             .cards-grid { grid-template-columns: repeat(2, 1fr); }
         }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
     </style>
 </head>
 <body>
@@ -598,6 +604,23 @@
                         {% endfor %}
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Live System Activity & Log Stream (SSE) -->
+        <div class="campaign-card" style="margin-top: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                <h2 style="display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px;">
+                    <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #22c55e; animation: pulse 1.5s infinite;" id="sseDot"></span>
+                    Live System Activity Stream
+                </h2>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <span id="sseStatusBadge" style="font-size: 12px; color: #16a34a; font-weight: 600;">● Live Connected</span>
+                    <button type="button" onclick="clearLiveLogs()" class="btn btn-sm" style="background:#475569; color:white; font-size:11px;">Clear Log</button>
+                </div>
+            </div>
+            <div id="liveLogsTerminal" style="background: #0f172a; color: #cbd5e1; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; padding: 14px; border-radius: 8px; margin-top: 12px; max-height: 220px; overflow-y: auto; line-height: 1.5;">
+                <div style="color: #64748b; font-style: italic;">Connecting to event stream...</div>
             </div>
         </div>
     </div>
@@ -1110,9 +1133,68 @@
     </script>
 
     <script>
-        setTimeout(function() {
-            window.location.reload();
-        }, 30000);
+        // Real-Time SSE Log Stream Handler
+        (function() {
+            const term = document.getElementById('liveLogsTerminal');
+            const badge = document.getElementById('sseStatusBadge');
+            const dot = document.getElementById('sseDot');
+            if (!term) return;
+
+            let evtSource = null;
+            function connectSSE() {
+                evtSource = new EventSource('/api/logs/stream');
+
+                evtSource.onopen = function() {
+                    if (badge) {
+                        badge.textContent = '● Live Connected';
+                        badge.style.color = '#16a34a';
+                    }
+                    if (dot) dot.style.background = '#22c55e';
+                };
+
+                evtSource.onmessage = function(e) {
+                    if (!e.data || e.data.trim() === '' || e.data.startsWith(':')) return;
+                    try {
+                        const payload = JSON.parse(e.data);
+                        if (payload.logs && payload.logs.length > 0) {
+                            payload.logs.forEach(log => {
+                                const row = document.createElement('div');
+                                row.style.marginBottom = '5px';
+                                row.style.borderBottom = '1px solid #1e293b';
+                                row.style.paddingBottom = '4px';
+
+                                const timeSpan = '<span style="color:#64748b;">[' + (log.timestamp || '') + ']</span> ';
+                                const actionSpan = '<span style="color:#38bdf8; font-weight:600;">' + (log.action || 'LOG') + '</span> ';
+                                const emailSpan = log.email ? '<span style="color:#fbbf24;">(' + log.email + ')</span> ' : '';
+                                const detailSpan = '<span style="color:#f1f5f9;">' + (log.details || '') + '</span>';
+
+                                row.innerHTML = timeSpan + actionSpan + emailSpan + detailSpan;
+                                term.appendChild(row);
+                            });
+                            term.scrollTop = term.scrollHeight;
+                        }
+                    } catch (err) {
+                        console.error('Error parsing SSE data:', err);
+                    }
+                };
+
+                evtSource.onerror = function() {
+                    if (badge) {
+                        badge.textContent = '○ Reconnecting...';
+                        badge.style.color = '#eab308';
+                    }
+                    if (dot) dot.style.background = '#eab308';
+                };
+            }
+
+            window.clearLiveLogs = function() {
+                if (term) {
+                    term.innerHTML = '<div style="color: #64748b; font-style: italic;">Log cleared. Waiting for events...</div>';
+                }
+            };
+
+            connectSSE();
+        })();
     </script>
 </body>
 </html>

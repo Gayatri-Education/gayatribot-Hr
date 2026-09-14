@@ -93,16 +93,15 @@
 
     <div class="container">
         <!-- Filters -->
-        <div class="filters">
+        <form method="GET" action="/applicants" class="filters" id="filtersForm">
             <div class="filter-group">
                 <label>Search</label>
                 <input type="text" name="search" placeholder="Name or email..."
-                       value="{{ filters.search }}"
-                       onchange="window.location.href='?search='+this.value+'{% if filters.domain %}&domain={{ filters.domain }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}'">
+                       value="{{ filters.search }}">
             </div>
             <div class="filter-group">
                 <label>Domain</label>
-                <select onchange="window.location.href='?domain='+this.value{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search|urlencode }}{% endif %}">
+                <select name="domain" onchange="document.getElementById('filtersForm').submit()">
                     <option value="">All Domains</option>
                     {% for d in domains %}
                     <option value="{{ d }}" {% if filters.domain == d %}selected{% endif %}>{{ d }}</option>
@@ -111,15 +110,33 @@
             </div>
             <div class="filter-group">
                 <label>Status</label>
-                <select onchange="window.location.href='?status='+this.value{% if filters.domain %}&domain={{ filters.domain }}{% endif %}{% if filters.search %}&search={{ filters.search|urlencode }}{% endif %}">
+                <select name="status" onchange="document.getElementById('filtersForm').submit()">
                     <option value="">All Statuses</option>
                     <option value="Pending" {% if filters.status == 'Pending' %}selected{% endif %}>Pending</option>
                     <option value="Approved" {% if filters.status == 'Approved' %}selected{% endif %}>Approved</option>
                     <option value="Rejected" {% if filters.status == 'Rejected' %}selected{% endif %}>Rejected</option>
                 </select>
             </div>
+            <button type="submit" class="btn btn-primary">Filter</button>
             <a href="/applicants" class="btn btn-secondary">Clear Filters</a>
+        </form>
+
+        <!-- Bulk Actions Floating/Sticky Bar -->
+        <div id="bulkActionBar" style="display: none; background: #eff6ff; border: 1.5px solid #93c5fd; border-radius: 10px; padding: 12px 20px; margin-bottom: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+            <div style="font-weight: 600; color: #1e40af; font-size: 14px; display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 18px;">⚡</span>
+                <span id="selectedCountText">0 applicants selected</span>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button type="button" onclick="executeBulkAction('approve')" class="btn btn-sm" style="background:#16a34a; color:white;">✅ Bulk Approve</button>
+                <button type="button" onclick="executeBulkAction('reject')" class="btn btn-sm" style="background:#dc2626; color:white;">❌ Bulk Reject</button>
+                <button type="button" onclick="executeBulkAction('send_reminder')" class="btn btn-sm" style="background:#d97706; color:white;">📧 Bulk Send Reminders</button>
+                <button type="button" onclick="executeBulkAction('send_offer')" class="btn btn-sm" style="background:#0284c7; color:white;">📜 Bulk Dispatch Offers</button>
+                <button type="button" onclick="clearSelection()" class="btn btn-sm btn-secondary">Clear</button>
+            </div>
         </div>
+
+        <div id="bulkToast" style="display: none; background: #1e293b; color: white; border-radius: 8px; padding: 14px 22px; position: fixed; bottom: 25px; right: 25px; z-index: 9999; box-shadow: 0 4px 15px rgba(0,0,0,0.3); font-size: 14px;"></div>
 
         <!-- Applicants Table -->
         <div class="table-container">
@@ -128,11 +145,15 @@
             <table>
                 <thead>
                     <tr>
+                        <th style="width: 36px;">
+                            <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)" style="cursor:pointer; width:16px; height:16px;">
+                        </th>
                         <th>Name</th>
                         <th>Email</th>
                         <th>Internship</th>
                         <th>Status</th>
                         <th>Result Email</th>
+                        <th>Offer Letter</th>
                         <th>Submitted</th>
                         <th>Actions</th>
                     </tr>
@@ -140,6 +161,9 @@
                 <tbody>
                     {% for a in applicants %}
                     <tr>
+                        <td>
+                            <input type="checkbox" class="applicant-checkbox" value="{{ a.id }}" onchange="updateSelectedCount()" style="cursor:pointer; width:16px; height:16px;">
+                        </td>
                         <td><a href="/applicant/{{ a.id }}">{{ a.name or '—' }}</a></td>
                         <td>{{ a.email }}</td>
                         <td>{{ a.internship_domain or '—' }}</td>
@@ -149,6 +173,13 @@
                                 <span class="badge sent">Sent</span>
                             {% else %}
                                 <span class="badge not-sent">Pending</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if a.offer_sent_at %}
+                                <span class="badge sent">Sent</span>
+                            {% else %}
+                                <span class="badge not-sent">—</span>
                             {% endif %}
                         </td>
                         <td>{{ format_date(a.submitted_at) }}</td>
@@ -163,7 +194,7 @@
                                 <button type="submit" class="btn btn-sm" style="background:#dc3545;color:white;" onclick="return confirm('Reject {{ a.name or a.email }}?')">Reject</button>
                             </form>
                             {% else %}
-                            <span style="color:#aaa;font-size:12px;">—</span>
+                            <a href="/applicant/{{ a.id }}" class="btn btn-sm" style="background:#0284c7; color:white; font-size:11px;">View</a>
                             {% endif %}
                         </td>
                     </tr>
@@ -178,5 +209,91 @@
             {% endif %}
         </div>
     </div>
+
+    <script>
+        function getSelectedCheckboxes() {
+            return Array.from(document.querySelectorAll('.applicant-checkbox:checked'));
+        }
+
+        function updateSelectedCount() {
+            const selected = getSelectedCheckboxes();
+            const bar = document.getElementById('bulkActionBar');
+            const countText = document.getElementById('selectedCountText');
+            const selectAll = document.getElementById('selectAllCheckbox');
+            const allCheckboxes = document.querySelectorAll('.applicant-checkbox');
+
+            if (selected.length > 0) {
+                bar.style.display = 'flex';
+                countText.textContent = selected.length + ' applicant' + (selected.length > 1 ? 's' : '') + ' selected';
+            } else {
+                bar.style.display = 'none';
+            }
+
+            if (selectAll) {
+                selectAll.checked = allCheckboxes.length > 0 && selected.length === allCheckboxes.length;
+            }
+        }
+
+        function toggleSelectAll(masterCheckbox) {
+            const checkboxes = document.querySelectorAll('.applicant-checkbox');
+            checkboxes.forEach(cb => { cb.checked = masterCheckbox.checked; });
+            updateSelectedCount();
+        }
+
+        function clearSelection() {
+            const checkboxes = document.querySelectorAll('.applicant-checkbox');
+            checkboxes.forEach(cb => { cb.checked = false; });
+            const selectAll = document.getElementById('selectAllCheckbox');
+            if (selectAll) selectAll.checked = false;
+            updateSelectedCount();
+        }
+
+        function showToast(msg, isError = false) {
+            const toast = document.getElementById('bulkToast');
+            toast.textContent = msg;
+            toast.style.background = isError ? '#991b1b' : '#1e293b';
+            toast.style.display = 'block';
+            setTimeout(() => { toast.style.display = 'none'; }, 4500);
+        }
+
+        async function executeBulkAction(action) {
+            const selected = getSelectedCheckboxes();
+            if (selected.length === 0) {
+                alert('Please select at least one applicant.');
+                return;
+            }
+
+            const applicantIds = selected.map(cb => parseInt(cb.value));
+            const actionLabels = {
+                'approve': 'Approve',
+                'reject': 'Reject',
+                'send_reminder': 'Send Reminder Emails to',
+                'send_offer': 'Generate & Dispatch Offer Letters to'
+            };
+
+            const confirmMsg = `Are you sure you want to ${actionLabels[action] || action} ${applicantIds.length} selected applicant(s)?`;
+            if (!confirm(confirmMsg)) return;
+
+            showToast(`Processing ${actionLabels[action] || action} for ${applicantIds.length} applicants...`);
+
+            try {
+                const response = await fetch('/api/applicants/bulk-action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action, applicant_ids: applicantIds })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    showToast(`Success: Processed ${data.processed} applicant(s). ${data.failed > 0 ? data.failed + ' failed.' : ''}`);
+                    setTimeout(() => { window.location.reload(); }, 1200);
+                } else {
+                    showToast('Error: ' + (data.error || 'Bulk action failed'), true);
+                }
+            } catch (err) {
+                showToast('Network error while processing bulk action.', true);
+            }
+        }
+    </script>
 </body>
 </html>

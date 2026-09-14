@@ -18,7 +18,7 @@ import threading
 import atexit
 from datetime import datetime, timedelta
 
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, send_from_directory, stream_with_context
 from send_control import (
     is_globally_paused, set_globally_paused, get_global_pause_info,
     is_bot_paused, set_bot_paused, get_bot_pause_info,
@@ -211,11 +211,207 @@ def applicant_detail(applicant_id):
         flash("Applicant not found.", "error")
         return redirect(url_for("applicants"))
 
+    # Check if a generated offer PDF exists
+    offer_pdf_filename = None
+    offers_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_offers")
+    if os.path.exists(offers_dir) and applicant.get("name"):
+        safe_name = re.sub(r"[^\w\s-]", "", applicant["name"]).strip()
+        safe_name = re.sub(r"[\s]+", "_", safe_name)
+        for f in os.listdir(offers_dir):
+            if f.startswith(f"offer_{safe_name}_") and f.endswith(".pdf"):
+                offer_pdf_filename = f
+                break
+
     return render_template(
         "applicant_detail.html",
         applicant=applicant,
+        offer_pdf_filename=offer_pdf_filename,
         format_date=format_date,
     )
+
+
+@app.route("/applicant/<int:applicant_id>/send-offer", methods=["POST"])
+def send_applicant_offer(applicant_id):
+    """1-Click Offer Dispatch via HTML Form."""
+    from offer_letter_sender import send_single_offer
+    force = request.form.get("force", "false").lower() == "true"
+    success, msg, pdf_path = send_single_offer(applicant_id, force=force)
+    if success:
+        flash(msg, "success")
+    else:
+        flash(msg, "error")
+    return redirect(url_for("applicant_detail", applicant_id=applicant_id))
+
+
+@app.route("/api/applicant/<int:applicant_id>/send-offer", methods=["POST"])
+def api_send_applicant_offer(applicant_id):
+    """1-Click Offer Dispatch via JSON API."""
+    from offer_letter_sender import send_single_offer
+    data = request.get_json(silent=True) or {}
+    force = data.get("force", False)
+    success, msg, pdf_path = send_single_offer(applicant_id, force=force)
+    status_code = 200 if success else 400
+    pdf_filename = os.path.basename(pdf_path) if pdf_path else None
+    return jsonify({"success": success, "message": msg, "pdf_filename": pdf_filename}), status_code
+
+
+@app.route("/api/applicants/bulk-action", methods=["POST"])
+def api_bulk_action():
+    """Execute bulk actions (approve, reject, send_reminder, send_offer) on multiple applicants."""
+    data = request.get_json(silent=True) or {}
+    action = data.get("action", "")
+    applicant_ids = data.get("applicant_ids", [])
+
+    if not action or not applicant_ids or not isinstance(applicant_ids, list):
+        return jsonify({"success": False, "error": "Action and applicant_ids list are required."}), 400
+
+    from offer_letter_sender import send_single_offer
+    from smtp_sender import build_reminder_email
+    from smtp_service import send_and_log, SenderPool
+    from database import get_applicant_detail, update_approval_status, add_processing_log
+
+    processed = 0
+    failed = 0
+    details = []
+
+    for aid in applicant_ids:
+        try:
+            app_data = get_applicant_detail(int(aid))
+            if not app_data:
+                failed += 1
+                details.append({"id": aid, "status": "failed", "message": "Applicant not found"})
+                continue
+
+            email = app_data.get("email", "")
+
+            if action == "approve":
+                update_approval_status(email, "Approved")
+                add_processing_log(email, "bulk_approved", "Marked as Approved via bulk action")
+                processed += 1
+                details.append({"id": aid, "email": email, "status": "success", "message": "Approved"})
+
+            elif action == "reject":
+                update_approval_status(email, "Rejected")
+                add_processing_log(email, "bulk_rejected", "Marked as Rejected via bulk action")
+                processed += 1
+                details.append({"id": aid, "email": email, "status": "success", "message": "Rejected"})
+
+            elif action == "send_offer":
+                success, msg, pdf_path = send_single_offer(app_data)
+                if success:
+                    processed += 1
+                    details.append({"id": aid, "email": email, "status": "success", "message": msg})
+                else:
+                    failed += 1
+                    details.append({"id": aid, "email": email, "status": "failed", "message": msg})
+
+            elif action == "send_reminder":
+                subject, html_body, text_body = build_reminder_email(app_data)
+                pool = SenderPool()
+                sender = pool.pick_sender()
+                if not sender:
+                    failed += 1
+                    details.append({"id": aid, "email": email, "status": "failed", "message": "All senders rate-limited"})
+                    continue
+                success, _ = send_and_log(
+                    to_addr=email,
+                    subject=subject,
+                    html_body=html_body,
+                    text_body=text_body,
+                    phase="reminder",
+                    pool=pool,
+                )
+                if success:
+                    processed += 1
+                    add_processing_log(email, "bulk_reminder_sent", "Reminder email sent via bulk action")
+                    details.append({"id": aid, "email": email, "status": "success", "message": "Reminder sent"})
+                else:
+                    failed += 1
+                    details.append({"id": aid, "email": email, "status": "failed", "message": "Send failed"})
+
+            else:
+                failed += 1
+                details.append({"id": aid, "status": "failed", "message": f"Unknown action '{action}'"})
+
+        except Exception as e:
+            failed += 1
+            details.append({"id": aid, "status": "error", "message": str(e)})
+
+    return jsonify({
+        "success": True,
+        "action": action,
+        "processed": processed,
+        "failed": failed,
+        "details": details,
+    })
+
+
+@app.route("/offers/download/<filename>")
+def download_offer_pdf(filename):
+    """View/Download generated offer letter PDF."""
+    offers_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_offers")
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(offers_dir, safe_filename)
+    if not os.path.exists(file_path):
+        flash("Offer letter file not found.", "error")
+        return redirect(url_for("applicants"))
+    return send_from_directory(offers_dir, safe_filename, as_attachment=False)
+
+
+@app.route("/api/logs/stream")
+def api_logs_stream():
+    """Server-Sent Events (SSE) endpoint to stream live system and email logs."""
+    @stream_with_context
+    def event_stream():
+        import time
+        last_log_id = 0
+
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(id) as max_id FROM processing_log")
+            row = cur.fetchone()
+            if row and row["max_id"]:
+                last_log_id = max(0, row["max_id"] - 5)
+            conn.close()
+        except Exception:
+            pass
+
+        while True:
+            try:
+                conn = get_db()
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT id, applicant_email, action, details, created_at "
+                    "FROM processing_log WHERE id > ? ORDER BY id ASC LIMIT 20",
+                    (last_log_id,)
+                )
+                rows = cur.fetchall()
+                conn.close()
+
+                if rows:
+                    log_data = []
+                    for r in rows:
+                        last_log_id = max(last_log_id, r["id"])
+                        log_data.append({
+                            "id": r["id"],
+                            "email": r["applicant_email"],
+                            "action": r["action"],
+                            "details": r["details"],
+                            "timestamp": r["created_at"],
+                        })
+                    yield f"data: {json.dumps({'logs': log_data})}\n\n"
+                else:
+                    yield ": keepalive\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+            time.sleep(1.5)
+
+    response = Response(event_stream(), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
 
 @app.route("/applicant/<int:applicant_id>/approve", methods=["POST"])
@@ -243,8 +439,8 @@ def approve_applicant(applicant_id):
         from bot_config import SERVICE_ACCOUNT_KEY, GOOGLE_SHEET_ID
 
         scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_KEY, scopes=scopes)
-        service = build("sheets", "v4", credentials=creds)
+        creds = _GoogleCredentials.from_service_account_file(SERVICE_ACCOUNT_KEY, scopes=scopes)
+        service = _google_build("sheets", "v4", credentials=creds)
 
         result = service.spreadsheets().values().get(
             spreadsheetId=GOOGLE_SHEET_ID,
@@ -375,14 +571,14 @@ def sync_google_sheet():
         from bot_config import SERVICE_ACCOUNT_KEY, GOOGLE_SHEET_ID, GOOGLE_SHEET_GID
 
         scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_KEY, scopes=scopes)
-        service = build("sheets", "v4", credentials=creds)
+        creds = _GoogleCredentials.from_service_account_file(SERVICE_ACCOUNT_KEY, scopes=scopes)
+        service = _google_build("sheets", "v4", credentials=creds)
 
         # Resolve sheet tab name from GID
         meta = service.spreadsheets().get(spreadsheetId=GOOGLE_SHEET_ID).execute()
         sheet_tab = None
         for s in meta.get("sheets", []):
-            if str(s.get("properties", {}).get("sheetId", "")) == str(GOGLE_SHEET_GID):
+            if str(s.get("properties", {}).get("sheetId", "")) == str(GOOGLE_SHEET_GID):
                 sheet_tab = s["properties"]["title"]
                 break
         if not sheet_tab:
